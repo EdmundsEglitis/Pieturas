@@ -126,7 +126,15 @@
 
             try {
                 const resp = await fetch(url);
-                const data = await resp.json();
+                const text = await resp.text();
+
+                // If response is not JSON, return empty array
+                if (!text.startsWith('{')) {
+                    console.warn('Overpass returned non-JSON response');
+                    return [];
+                }
+
+                const data = JSON.parse(text);
                 return data.elements || [];
             } catch (err) {
                 console.warn('Overpass error', err);
@@ -199,6 +207,7 @@
                 const routeCoords = data.features[0].geometry.coordinates;
                 const latlngs = routeCoords.map(c => [c[1], c[0]]);
 
+                // Fetch Overpass for bounding box (keeps your fallback, unchanged)
                 const allMaxspeeds = await fetchAllMaxspeeds(map.getBounds());
 
                 // Prepare segments
@@ -210,7 +219,7 @@
                     });
                 }
 
-                // Batch fetch from DB
+                // Batch fetch from DB (returns [{index, maxspeed}, ...])
                 let dbSegments = [];
                 try {
                     const resp = await fetch('/api/road-segments-batch', {
@@ -219,36 +228,61 @@
                             'Content-Type': 'application/json',
                             'X-CSRF-TOKEN': csrfToken
                         },
-                        body: JSON.stringify({segments})
+                        body: JSON.stringify({ segments })
                     });
                     dbSegments = await resp.json();
                 } catch(err) {
                     console.error('Failed to fetch DB segments', err);
                 }
 
+                // Build mapping by index for safety
+                const dbByIndex = {};
+                if (Array.isArray(dbSegments)) {
+                    dbSegments.forEach(item => {
+                        if (typeof item.index !== 'undefined') {
+                            dbByIndex[item.index] = item;
+                        }
+                    });
+                }
+
+                // Collect missing segments to save in one batch
+                const missingSegments = [];
+
                 for (let i = 0; i < latlngs.length - 1; i++) {
                     const lat1 = latlngs[i][0], lon1 = latlngs[i][1];
                     const lat2 = latlngs[i+1][0], lon2 = latlngs[i+1][1];
 
-                    let segmentData = dbSegments[i];
-                    let speed = segmentData?.maxspeed;
+                    let dbEntry = dbByIndex[i];
+                    let speed = dbEntry?.maxspeed;
 
                     if (!speed) {
+                        // Fallback: Overpass nearest-match (as before)
                         speed = getSegmentSpeed(lat1, lon1, lat2, lon2, allMaxspeeds);
 
-                        // Save segment to DB asynchronously
-                        fetch('/api/save-road-segment', {
+                        // Collect to batch-save later (one HTTP request)
+                        missingSegments.push({ lat1, lon1, lat2, lon2, maxspeed: speed });
+                    }
+
+                    const color = getColorForSpeed(speed);
+                    L.polyline([[lat1, lon1], [lat2, lon2]], {color, weight:5, opacity:0.85}).addTo(map);
+                }
+
+                // Save missing segments in a single batched POST (if any)
+                if (missingSegments.length > 0) {
+                    try {
+                        fetch('/api/save-road-segment-batch', {
                             method: 'POST',
                             headers: {
                                 'Content-Type': 'application/json',
                                 'X-CSRF-TOKEN': csrfToken
                             },
-                            body: JSON.stringify({ lat1, lon1, lat2, lon2, maxspeed: speed })
-                        });
+                            body: JSON.stringify({ segments: missingSegments })
+                        })
+                        // intentionally not awaiting to avoid blocking UI; you may await if desired
+                        .catch(err => console.warn('Failed to save batch segments', err));
+                    } catch (err) {
+                        console.warn('Save batch error', err);
                     }
-
-                    const color = getColorForSpeed(speed);
-                    L.polyline([[lat1, lon1], [lat2, lon2]], {color, weight:5, opacity:0.85}).addTo(map);
                 }
 
                 // Add draggable markers

@@ -37,10 +37,16 @@ Route::middleware(['auth', 'verified'])->group(function () {
 // -----------------------------
 // Road Segment Speed API
 // -----------------------------
+// -----------------------------
+// Road Segment Speed API
+// -----------------------------
 Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('/api/road-speed', [BusStopShowController::class, 'getRoadSpeed']);
     Route::post('/api/road-speed', [BusStopShowController::class, 'saveRoadSegment']);
     Route::post('/api/road-segments-batch', [BusStopShowController::class, 'batchRoadSpeeds']);
+
+    // ✅ New endpoint for batch saving segments
+    Route::post('/api/save-road-segment-batch', [BusStopShowController::class, 'saveRoadSegmentBatch']);
 });
 Route::post('/api/save-road-segment', [BusStopShowController::class, 'saveRoadSegment'])
     ->middleware(['auth', 'verified']);
