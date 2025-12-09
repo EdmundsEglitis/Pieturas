@@ -81,7 +81,7 @@
         function formatTime(s){const h=Math.floor(s/3600), m=Math.floor((s%3600)/60); return h>0?`${h} h ${m} min`:`${m} min`; }
         function getColorForSpeed(speed){return {20:'red',30:'pink',50:'orange',70:'lime',80:'yellow',90:'green',100:'teal',110:'blue',120:'purple'}[speed] ?? 'gray';}
 
-        document.addEventListener('DOMContentLoaded', async ()=>{
+        document.addEventListener('DOMContentLoaded', async ()=> {
             let stops=@json($stops);
             if(!stops.length) return;
 
@@ -96,13 +96,25 @@
             let markers=[];
             let polyMap=[];
 
-            async function drawRoute(){
-                map.eachLayer(l=>{if(l instanceof L.Polyline) map.removeLayer(l);});
+            function canonicalizeSegment(seg) {
+                const lat1 = Number(seg.lat1.toFixed ? seg.lat1.toFixed(7) : Number(seg.lat1).toFixed(7));
+                const lon1 = Number(seg.lon1.toFixed ? seg.lon1.toFixed(7) : Number(seg.lon1).toFixed(7));
+                const lat2 = Number(seg.lat2.toFixed ? seg.lat2.toFixed(7) : Number(seg.lat2).toFixed(7));
+                const lon2 = Number(seg.lon2.toFixed ? seg.lon2.toFixed(7) : Number(seg.lon2).toFixed(7));
+                if (lat1 > lat2 || (lat1 === lat2 && lon1 > lon2)) {
+                    return {lat1:lat2, lon1:lon2, lat2:lat1, lon2:lon1};
+                }
+                return {lat1, lon1, lat2, lon2};
+            }
+
+            async function drawRoute() {
+                map.eachLayer(l=>{ if (l instanceof L.Polyline) map.removeLayer(l); });
                 markers.forEach(m=>map.removeLayer(m));
                 markers=[]; polyMap=[];
 
                 const coords=orderedStops.map(s=>[s.longitude,s.latitude]);
 
+                // ORS route request
                 let data;
                 try{
                     const res=await fetch("https://api.openrouteservice.org/v2/directions/driving-car/geojson",{
@@ -110,41 +122,50 @@
                         headers:{"Authorization":"{{ config('services.openrouteservice.key') }}","Content-Type":"application/json"},
                         body:JSON.stringify({coordinates:coords, instructions:true})
                     });
+                    if(!res.ok) throw new Error('ORS failed status '+res.status);
                     data=await res.json();
+                    if(!data.features?.length || !data.features[0].geometry?.coordinates) throw new Error('ORS malformed geometry');
                 }catch(err){
-                    console.error(err);
+                    console.error('Routing error', err);
                     document.getElementById('route-info').textContent='Routing failed';
+                    addMarkers();
                     return;
                 }
 
-                const routeCoords=data.features[0].geometry.coordinates;
-                const latlngs=routeCoords.map(c=>[c[1],c[0]]);
-
+                const latlngs=data.features[0].geometry.coordinates.map(c=>[c[1],c[0]]);
                 const segments=[];
                 for(let i=0;i<latlngs.length-1;i++){
                     segments.push({lat1:latlngs[i][0], lon1:latlngs[i][1], lat2:latlngs[i+1][0], lon2:latlngs[i+1][1]});
                 }
 
-                // Fetch DB speeds
-                let dbSegments=[];
-                try{
-                    const resp=await fetch('/api/road-segments-batch',{
-                        method:'POST',
-                        headers:{'Content-Type':'application/json','X-CSRF-TOKEN':csrfToken},
-                        body:JSON.stringify({segments})
-                    });
-                    dbSegments=await resp.json();
-                }catch(err){ console.error(err); }
-
-                const missingSegments=[];
-                segments.forEach((seg,i)=>{
-                    const speed=dbSegments[i]?.maxspeed ?? null;
-                    const color=speed?getColorForSpeed(speed):'gray';
-                    polyMap.push(L.polyline([[seg.lat1,seg.lon1],[seg.lat2,seg.lon2]],{color, weight:5, opacity:0.7}).addTo(map));
-                    if(!speed) missingSegments.push(seg);
+                segments.forEach(seg=>{
+                    polyMap.push(L.polyline([[seg.lat1,seg.lon1],[seg.lat2,seg.lon2]],{color:'gray', weight:5, opacity:0.7}).addTo(map));
                 });
 
-                // Fetch missing speeds via Overpass
+                // DB batch lookup
+                let dbSegments=[];
+                try{
+                    const resp = await fetch('/api/road-segments-batch', {
+                        method:'POST',
+                        headers:{'Content-Type':'application/json','X-CSRF-TOKEN':csrfToken},
+                        body: JSON.stringify({segments})
+                    });
+                    dbSegments = await resp.json();
+                }catch(err){
+                    console.warn('DB batch lookup error', err);
+                }
+
+                const missingSegments = [];
+                segments.forEach((seg, idx)=>{
+                    const matched = dbSegments[idx];
+                    const maxspeed = matched?.maxspeed ?? null;
+                    if(maxspeed){
+                        polyMap[idx].setStyle({color:getColorForSpeed(maxspeed)});
+                        seg.maxspeed=maxspeed;
+                    } else missingSegments.push(seg);
+                });
+
+                // Overpass only for missing segments, do not default to 50
                 if(missingSegments.length>0){
                     const south=Math.min(...missingSegments.map(s=>s.lat1).concat(missingSegments.map(s=>s.lat2))),
                           north=Math.max(...missingSegments.map(s=>s.lat1).concat(missingSegments.map(s=>s.lat2))),
@@ -153,63 +174,63 @@
                     const query=`[out:json];way["highway"]["maxspeed"](${south},${west},${north},${east});out tags geom;`;
                     let ways=[];
                     try{
-                        const resp=await fetch('https://overpass-api.de/api/interpreter?data='+encodeURIComponent(query));
-                        const text=await resp.text();
-                        ways=text.startsWith('{')?JSON.parse(text).elements:[]; 
-                    }catch(err){ console.warn('Overpass error',err); }
+                        const resp = await fetch('https://overpass-api.de/api/interpreter?data='+encodeURIComponent(query));
+                        const text = await resp.text();
+                        ways = text.startsWith('{') ? JSON.parse(text).elements || [] : [];
+                    }catch(err){ console.warn('Overpass error', err); ways=[]; }
 
+                    const toSave=[];
                     missingSegments.forEach(seg=>{
                         let nearest=null, minDist=Infinity;
+                        const midLat=(seg.lat1+seg.lat2)/2, midLon=(seg.lon1+seg.lon2)/2;
                         ways.forEach(w=>{
-                            if(!w.geometry) return;
+                            if(!w.geometry||!w.tags) return;
                             for(let j=0;j<w.geometry.length-1;j++){
                                 const pt1=w.geometry[j], pt2=w.geometry[j+1];
-                                const midLat=(seg.lat1+seg.lat2)/2, midLon=(seg.lon1+seg.lon2)/2;
-                                const dist=map.distance([midLat,midLon],[(pt1.lat+pt2.lat)/2,(pt1.lon+pt2.lon)/2]);
-                                if(dist<minDist){minDist=dist; nearest=w;}
+                                const latMid=(pt1.lat+pt2.lat)/2, lonMid=(pt1.lon+pt2.lon)/2;
+                                const dist = map.distance([midLat,midLon],[latMid,lonMid]);
+                                if(dist<minDist){ minDist=dist; nearest=w; }
                             }
                         });
-                        seg.maxspeed=nearest?parseInt(nearest.tags.maxspeed)||50:50;
-                        seg.mid_lat=(seg.lat1+seg.lat2)/2;
-                        seg.mid_lon=(seg.lon1+seg.lon2)/2;
+                        if(nearest && nearest.tags && nearest.tags.maxspeed){
+                            const parsedSpeed = parseInt(nearest.tags.maxspeed) || null;
+                            if(parsedSpeed){
+                                seg.maxspeed=parsedSpeed;
+                                seg.mid_lat=Number(((seg.lat1+seg.lat2)/2).toFixed(7));
+                                seg.mid_lon=Number(((seg.lon1+seg.lon2)/2).toFixed(7));
+                                toSave.push(seg);
+                            }
+                        }
                     });
 
-                    // Save missing segments
-                    try{
-                        await fetch('/api/save-road-segment-batch',{
-                            method:'POST',
-                            headers:{'Content-Type':'application/json','X-CSRF-TOKEN':csrfToken},
-                            body:JSON.stringify({segments:missingSegments})
+                    if(toSave.length>0){
+                        try{
+                            const resp=await fetch('/api/save-road-segment-batch',{
+                                method:'POST',
+                                headers:{'Content-Type':'application/json','X-CSRF-TOKEN':csrfToken},
+                                body:JSON.stringify({segments:toSave})
+                            });
+                            if(!resp.ok) console.warn('Save batch returned non-ok', resp.status);
+                        }catch(err){ console.warn('Save batch error', err); }
+
+                        toSave.forEach(seg=>{
+                            const idx=segments.findIndex(s=>{
+                                const a=canonicalizeSegment(s), b=canonicalizeSegment(seg);
+                                return a.lat1===b.lat1 && a.lon1===b.lon1 && a.lat2===b.lat2 && a.lon2===b.lon2;
+                            });
+                            if(idx>=0) polyMap[idx].setStyle({color:getColorForSpeed(seg.maxspeed)});
                         });
-                    }catch(err){ console.warn(err); }
-
-                    // Update polyline colors
-                    missingSegments.forEach(seg=>{
-                        const idx=segments.findIndex(s=>s.lat1===seg.lat1 && s.lon1===seg.lon1 && s.lat2===seg.lat2 && s.lon2===seg.lon2);
-                        if(idx>=0) polyMap[idx].setStyle({color:getColorForSpeed(seg.maxspeed)});
-                    });
+                    }
                 }
 
-                // Add draggable markers
-                orderedStops.forEach(stop=>{
-                    const m=L.marker([stop.latitude,stop.longitude],{draggable:true})
-                        .bindPopup(stop.name)
-                        .addTo(map)
-                        .on('dragend',e=>{
-                            stop.latitude=e.target.getLatLng().lat;
-                            stop.longitude=e.target.getLatLng().lng;
-                            drawRoute();
-                        });
-                    markers.push(m);
-                });
+                addMarkers();
 
-                // Route summary
-                const summary=data.features[0].properties.summary;
-                document.getElementById('route-info').textContent=`Route: ${formatDistance(summary.distance)}, ${formatTime(summary.duration)}`;
+                const summary = data.features[0].properties?.summary;
+                if(summary) document.getElementById('route-info').textContent=`Route: ${formatDistance(summary.distance)}, ${formatTime(summary.duration)}`;
+                else document.getElementById('route-info').textContent=`Route loaded`;
 
-                // Directions
-                const steps=data.features[0].properties.segments[0].steps;
-                const dirList=document.getElementById('directions-list');
+                const steps = data.features[0].properties?.segments?.[0]?.steps || [];
+                const dirList = document.getElementById('directions-list');
                 dirList.innerHTML='';
                 steps.forEach(step=>{
                     const li=document.createElement('li');
@@ -218,16 +239,29 @@
                 });
             }
 
+            function addMarkers(){
+                orderedStops.forEach(stop=>{
+                    const m=L.marker([stop.latitude, stop.longitude],{draggable:true})
+                        .bindPopup(stop.name)
+                        .addTo(map)
+                        .on('dragend', e=>{
+                            stop.latitude=e.target.getLatLng().lat;
+                            stop.longitude=e.target.getLatLng().lng;
+                            drawRoute();
+                        });
+                    markers.push(m);
+                });
+            }
+
             drawRoute();
 
             Sortable.create(document.getElementById('stops-table-body'),{
                 animation:150,
                 onEnd:function(){
-                    const newOrder=Array.from(document.querySelectorAll('#stops-table-body tr')).map(tr=>{
+                    orderedStops=Array.from(document.querySelectorAll('#stops-table-body tr')).map(tr=>{
                         const id=parseInt(tr.dataset.id);
                         return stops.find(s=>s.id===id);
                     });
-                    orderedStops=newOrder;
                     drawRoute();
                 }
             });

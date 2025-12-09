@@ -9,6 +9,9 @@ use App\Models\RoadSegment;
 
 class BusStopShowController extends Controller
 {
+    /**
+     * Show multiple selected bus stops (map page).
+     */
     public function multiple(Request $request)
     {
         $ids = explode(',', $request->query('stops', ''));
@@ -16,107 +19,134 @@ class BusStopShowController extends Controller
         return view('busstop.multiple', compact('stops'));
     }
 
+    /**
+     * Batch lookup: given array of segments returns an array where each element
+     * corresponds to the input segment index with 'index' and 'maxspeed' (or null).
+     *
+     * Input payload: { segments: [{lat1,lon1,lat2,lon2}, ...] }
+     */
     public function batchRoadSpeeds(Request $request)
     {
         $segments = $request->input('segments', []);
-        if (empty($segments)) return response()->json([]);
+        if (empty($segments)) {
+            return response()->json([]);
+        }
 
-        $lookup = [];
-        $placeholders = [];
-        $bindings = [];
-
+        // Build canonical keys for all segments (same rounding/ordering logic as save)
+        $keys = [];
+        $orderedKeys = []; // to preserve order when mapping back
         foreach ($segments as $i => $s) {
-            $lat1 = (string)$s['lat1'];
-            $lon1 = (string)$s['lon1'];
-            $lat2 = (string)$s['lat2'];
-            $lon2 = (string)$s['lon2'];
+            $lat1 = round(floatval($s['lat1']), 7);
+            $lon1 = round(floatval($s['lon1']), 7);
+            $lat2 = round(floatval($s['lat2']), 7);
+            $lon2 = round(floatval($s['lon2']), 7);
 
-            // Canonical ordering to handle reversed segments
-            if ([$lat1,$lon1] > [$lat2,$lon2]) {
-                [$lat1,$lon1,$lat2,$lon2] = [$lat2,$lon2,$lat1,$lon1];
+            // canonical order (smallest first)
+            if ( [$lat1, $lon1] > [$lat2, $lon2] ) {
+                [$lat1, $lon1, $lat2, $lon2] = [$lat2, $lon2, $lat1, $lon1];
             }
 
-            $placeholders[] = "(?, ?, ?, ?)";
-            array_push($bindings, $lat1, $lon1, $lat2, $lon2);
+            $key = "$lat1|$lon1|$lat2|$lon2";
+            $keys[$key] = true;
+            $orderedKeys[$i] = $key;
         }
 
-        $inClause = implode(',', $placeholders);
-        $rows = RoadSegment::whereRaw("(lat1, lon1, lat2, lon2) IN ($inClause)", $bindings)->get();
+        // If no keys, return empty
+        if (empty($keys)) {
+            return response()->json([]);
+        }
+
+        // Query DB for any rows matching canonical keys
+        // NOTE: using a concat key in SQL; make sure your DB supports this (MySQL/Postgres do).
+        // This avoids issuing N separate queries.
+        $dbKeys = array_keys($keys);
+
+        // Build lookup of key => maxspeed
+        $lookup = [];
+
+        // Use raw CONCAT to match canonical key (lat/lon stored as decimals with same precision)
+        // To make matching reliable, ensure DB values have same rounding (we round before storing).
+        $rows = RoadSegment::select('lat1','lon1','lat2','lon2','maxspeed')
+            ->whereIn(DB::raw("CONCAT(lat1,'|',lon1,'|',lat2,'|',lon2)"), $dbKeys)
+            ->get();
 
         foreach ($rows as $r) {
-            $key1 = "{$r->lat1},{$r->lon1},{$r->lat2},{$r->lon2}";
-            $key2 = "{$r->lat2},{$r->lon2},{$r->lat1},{$r->lon1}";
-            $lookup[$key1] = $r->maxspeed;
-            $lookup[$key2] = $r->maxspeed;
+            // Rely on DB values being rounded to the same precision as saved
+            $k = "{$r->lat1}|{$r->lon1}|{$r->lat2}|{$r->lon2}";
+            $lookup[$k] = $r->maxspeed;
         }
 
+        // Build response aligned with input order (index given back)
         $result = [];
-        foreach ($segments as $i => $s) {
-            $key1 = "{$s['lat1']},{$s['lon1']},{$s['lat2']},{$s['lon2']}";
-            $key2 = "{$s['lat2']},{$s['lon2']},{$s['lat1']},{$s['lon1']}";
+        foreach ($orderedKeys as $i => $key) {
             $result[] = [
                 'index' => $i,
-                'maxspeed' => $lookup[$key1] ?? $lookup[$key2] ?? null
+                'maxspeed' => $lookup[$key] ?? null
             ];
         }
 
         return response()->json($result);
     }
 
-public function saveRoadSegmentBatch(Request $request)
-{
-    $segments = $request->input('segments', []);
-    \Log::info('Received segments for saving', $segments); // DEBUG
-
-    if (empty($segments)) {
-        \Log::info('No segments to save.');
-        return response()->json(['saved' => 0]);
-    }
-
-    $savedCount = 0;
-
-    DB::transaction(function() use ($segments, &$savedCount) {
-        foreach ($segments as $s) {
-            $lat1 = round($s['lat1'], 7);
-            $lon1 = round($s['lon1'], 7);
-            $lat2 = round($s['lat2'], 7);
-            $lon2 = round($s['lon2'], 7);
-            $maxspeed = $s['maxspeed'] ?? 50;
-
-            $midLat = round(($lat1 + $lat2) / 2, 7);
-            $midLon = round(($lon1 + $lon2) / 2, 7);
-
-            $data = [
-                'lat1'=>$lat1, 'lon1'=>$lon1, 'lat2'=>$lat2, 'lon2'=>$lon2,
-                'mid_lat'=>$midLat, 'mid_lon'=>$midLon, 'maxspeed'=>$maxspeed
-            ];
-
-            \Log::info('Saving segment', $data);
-
-            RoadSegment::updateOrCreate(
-                ['lat1'=>$lat1,'lon1'=>$lon1,'lat2'=>$lat2,'lon2'=>$lon2],
-                $data
-            );
-
-            $revData = [
-                'lat1'=>$lat2,'lon1'=>$lon2,'lat2'=>$lat1,'lon2'=>$lon1,
-                'mid_lat'=>$midLat,'mid_lon'=>$midLon,'maxspeed'=>$maxspeed
-            ];
-
-            \Log::info('Saving reversed segment', $revData);
-
-            RoadSegment::updateOrCreate(
-                ['lat1'=>$lat2,'lon1'=>$lon2,'lat2'=>$lat1,'lon2'=>$lon1],
-                $revData
-            );
-
-            $savedCount++;
+    /**
+     * Save discovered segments in batch.
+     *
+     * This saves *only* canonical ordering (lat1/lon1 <= lat2/lon2) and only saves segments
+     * that have an explicit maxspeed discovered (caller should only send segments that have
+     * a real discovered maxspeed). This prevents duplicates and avoids overwriting existing
+     * good data with defaults.
+     *
+     * Input payload: { segments: [{lat1,lon1,lat2,lon2,mid_lat,mid_lon,maxspeed}, ...] }
+     */
+    public function saveRoadSegmentBatch(Request $request)
+    {
+        $segments = $request->input('segments', []);
+        if (empty($segments)) {
+            return response()->json(['saved' => 0]);
         }
-    });
 
-    \Log::info("Saved segments count: $savedCount");
+        $saved = 0;
 
-    return response()->json(['saved' => $savedCount]);
-}
+        DB::transaction(function() use ($segments, &$saved) {
+            foreach ($segments as $s) {
+                // Validate presence of required fields and that maxspeed is numeric
+                if (!isset($s['lat1'], $s['lon1'], $s['lat2'], $s['lon2']) || !isset($s['maxspeed'])) {
+                    continue;
+                }
 
+                $lat1 = round(floatval($s['lat1']), 7);
+                $lon1 = round(floatval($s['lon1']), 7);
+                $lat2 = round(floatval($s['lat2']), 7);
+                $lon2 = round(floatval($s['lon2']), 7);
+                $maxspeed = intval($s['maxspeed']);
+
+                // canonical ordering: only save in one orientation to prevent duplicates
+                if ( [$lat1, $lon1] > [$lat2, $lon2] ) {
+                    [$lat1, $lon1, $lat2, $lon2] = [$lat2, $lon2, $lat1, $lon1];
+                }
+
+                $midLat = round(($lat1 + $lat2) / 2, 7);
+                $midLon = round(($lon1 + $lon2) / 2, 7);
+
+                // updateOrCreate keyed on canonical lat/lon pair — this prevents duplicates
+                RoadSegment::updateOrCreate(
+                    [
+                        'lat1' => $lat1,
+                        'lon1' => $lon1,
+                        'lat2' => $lat2,
+                        'lon2' => $lon2,
+                    ],
+                    [
+                        'mid_lat' => $midLat,
+                        'mid_lon' => $midLon,
+                        'maxspeed' => $maxspeed
+                    ]
+                );
+
+                $saved++;
+            }
+        });
+
+        return response()->json(['saved' => $saved]);
+    }
 }

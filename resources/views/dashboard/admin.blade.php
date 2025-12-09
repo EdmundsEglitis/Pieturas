@@ -11,12 +11,15 @@
                 Import Bus Stops
             </a>
 
+            <a href="{{ route('road-segments.index') }}" class="block p-4 bg-blue-200 rounded hover:bg-blue-300">
+                Manage Road Segments
+            </a>
+
             @if($lastUpdated)
                 <p>Last updated bus stop: {{ $lastUpdated->diffForHumans() }}</p>
             @else
                 <p>No bus stops updated yet.</p>
             @endif
-
         </div>
     </div>
 </x-app-layout>
