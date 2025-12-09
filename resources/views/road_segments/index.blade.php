@@ -179,7 +179,7 @@
                 }
 
                 try {
-                    const resp = await fetch('/api/save-road-segment-batch', {
+                    const resp = await fetch('/api/save-road-segment-batch-admin', { // <- renamed for admin
                         method: 'POST',
                         headers: {'Content-Type':'application/json','X-CSRF-TOKEN':csrfToken},
                         body: JSON.stringify({segments: toSave})

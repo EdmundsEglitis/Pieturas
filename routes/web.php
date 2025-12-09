@@ -111,10 +111,10 @@ Route::middleware(['auth', 'admin'])->group(function () {
     Route::get('/road-segments', [RoadSegmentController::class, 'index'])->name('road-segments.index');
     Route::get('/road-segments/{roadSegment}/edit', [RoadSegmentController::class, 'edit'])->name('road-segments.edit');
     Route::patch('/road-segments/{roadSegment}', [RoadSegmentController::class, 'update'])->name('road-segments.update');
-    Route::post('/api/save-road-segment-batch', [RoadSegmentController::class, 'saveBatch']);
+
+    // RENAMED route to avoid conflict with dashboard map
+    Route::post('/api/save-road-segment-batch-admin', [RoadSegmentController::class, 'saveBatch']);
 });
-
-
 
 /*
 |--------------------------------------------------------------------------
