@@ -9,5 +9,7 @@ class RoadSegment extends Model
 {
     use HasFactory;
 
-    protected $fillable = ['lat1', 'lon1', 'lat2', 'lon2', 'maxspeed'];
+    protected $fillable = [
+        'lat1', 'lon1', 'lat2', 'lon2', 'mid_lat', 'mid_lon', 'maxspeed'
+    ];
 }
