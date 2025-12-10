@@ -11,14 +11,32 @@
     <div class="relative">
         <div id="map" class="w-full h-[600px] rounded border shadow"></div>
 
+        <!-- Speed Legend -->
         <div class="p-2 rounded bg-white shadow absolute top-4 right-4 z-[9999] text-sm">
             <h4 class="font-bold mb-1">Speed Limit (Latvia)</h4>
+
             @php
-                $colors = [20=>'red',30=>'pink',50=>'orange',70=>'lime',80=>'yellow',90=>'green',100=>'teal',110=>'blue',120=>'purple'];
+                // Unified color palette
+                $colors = [
+                    20  => '#e6194B', // Strong Red
+                    30  => '#f58231', // Orange
+                    40  => '#ffe119', // Yellow
+                    50  => '#bfef45', // Lime green
+                    60  => '#3cb44b', // Green
+                    70  => '#42d4f4', // Light Cyan
+                    80  => '#4363d8', // Blue
+                    90  => '#911eb4', // Purple
+                    100 => '#f032e6', // Magenta
+                    110 => '#a9a9a9', // Gray
+                    120 => '#000000', // Black
+                ];
             @endphp
-            @foreach([20,30,50,70,80,90,100,110,120] as $speed)
-                <div>
-                    <span class="inline-block w-4 h-4 mr-1" style="background-color: {{ $colors[$speed] }};"></span>{{ $speed }}
+
+            @foreach([20,30,40,50,60,70,80,90,100,110,120] as $speed)
+                <div class="flex items-center mb-1">
+                    <span class="inline-block w-4 h-4 mr-2 rounded-sm"
+                          style="background-color: {{ $colors[$speed] }};"></span>
+                    {{ $speed }} km/h
                 </div>
             @endforeach
         </div>
@@ -76,149 +94,219 @@
 <script>
 const csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
 
-function toggleDirections() { document.getElementById('directions-box').classList.toggle('hidden'); }
-function formatDistance(m) { return m<1000?`${m.toFixed(0)} m`:`${(m/1000).toFixed(2)} km`; }
-function formatTime(s){const h=Math.floor(s/3600), m=Math.floor((s%3600)/60); return h>0?`${h} h ${m} min`:`${m} min`; }
-function getColorForSpeed(speed){return {20:'red',30:'pink',50:'orange',70:'lime',80:'yellow',90:'green',100:'teal',110:'blue',120:'purple'}[speed] ?? 'gray';}
+function toggleDirections() {
+    document.getElementById('directions-box').classList.toggle('hidden');
+}
 
-document.addEventListener('DOMContentLoaded', async ()=> {
-    let stops=@json($stops);
-    if(!stops.length) return;
+function formatDistance(m) { return m < 1000 ? `${m.toFixed(0)} m` : `${(m/1000).toFixed(2)} km`; }
+function formatTime(s) {
+    const h = Math.floor(s/3600), m = Math.floor((s%3600)/60);
+    return h > 0 ? `${h} h ${m} min` : `${m} min`;
+}
 
-    const mapStops=stops.map(s=>L.latLng(s.latitude,s.longitude));
-    const map=window.map=L.map('map').fitBounds(mapStops);
+/* NEW unified speed color map */
+const speedColors = {
+    20:  '#e6194B',
+    30:  '#f58231',
+    40:  '#ffe119',
+    50:  '#bfef45',
+    60:  '#3cb44b',
+    70:  '#42d4f4',
+    80:  '#4363d8',
+    90:  '#911eb4',
+    100: '#f032e6',
+    110: '#a9a9a9',
+    120: '#000000',
+};
 
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
-        attribution:'&copy; OpenStreetMap contributors', maxZoom:19
+function getColorForSpeed(speed) {
+    return speedColors[speed] ?? '#999';
+}
+
+document.addEventListener('DOMContentLoaded', async () => {
+
+    let stops = @json($stops);
+    if (!stops.length) return;
+
+    const mapStops = stops.map(s => L.latLng(s.latitude, s.longitude));
+    const map = window.map = L.map('map').fitBounds(mapStops);
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OpenStreetMap contributors',
+        maxZoom: 19
     }).addTo(map);
 
-    let orderedStops=[...stops];
-    let markers=[];
-    let polyMap=[];
+    let orderedStops = [...stops];
+    let markers = [];
+    let polyMap = [];
 
     function canonicalizeSegment(seg) {
-        const lat1 = Number(seg.lat1.toFixed ? seg.lat1.toFixed(7) : Number(seg.lat1).toFixed(7));
-        const lon1 = Number(seg.lon1.toFixed ? seg.lon1.toFixed(7) : Number(seg.lon1).toFixed(7));
-        const lat2 = Number(seg.lat2.toFixed ? seg.lat2.toFixed(7) : Number(seg.lat2).toFixed(7));
-        const lon2 = Number(seg.lon2.toFixed ? seg.lon2.toFixed(7) : Number(seg.lon2).toFixed(7));
+        const lat1 = Number(seg.lat1.toFixed(7));
+        const lon1 = Number(seg.lon1.toFixed(7));
+        const lat2 = Number(seg.lat2.toFixed(7));
+        const lon2 = Number(seg.lon2.toFixed(7));
         if (lat1 > lat2 || (lat1 === lat2 && lon1 > lon2)) {
-            return {lat1:lat2, lon1:lon2, lat2:lat1, lon2:lon2};
+            return { lat1: lat2, lon1: lon2, lat2: lat1, lon2: lon1 };
         }
-        return {lat1, lon1, lat2, lon2};
+        return { lat1, lon1, lat2, lon2 };
     }
 
     async function drawRoute() {
-        map.eachLayer(l=>{ if (l instanceof L.Polyline) map.removeLayer(l); });
-        markers.forEach(m=>map.removeLayer(m));
-        markers=[]; polyMap=[];
+        // reset old lines
+        map.eachLayer(l => { if (l instanceof L.Polyline) map.removeLayer(l); });
+        markers.forEach(m => map.removeLayer(m));
+        markers = [];
+        polyMap = [];
 
-        const coords=orderedStops.map(s=>[s.longitude,s.latitude]);
+        const coords = orderedStops.map(s => [s.longitude, s.latitude]);
 
         let data;
-        try{
-            const res=await fetch("https://api.openrouteservice.org/v2/directions/driving-car/geojson",{
-                method:"POST",
-                headers:{"Authorization":"{{ config('services.openrouteservice.key') }}","Content-Type":"application/json"},
-                body:JSON.stringify({coordinates:coords, instructions:true})
+        try {
+            const res = await fetch("https://api.openrouteservice.org/v2/directions/driving-car/geojson", {
+                method: "POST",
+                headers: {
+                    "Authorization": "{{ config('services.openrouteservice.key') }}",
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({ coordinates: coords, instructions: true })
             });
-            if(!res.ok) throw new Error('ORS failed status '+res.status);
-            data=await res.json();
-            if(!data.features?.length || !data.features[0].geometry?.coordinates) throw new Error('ORS malformed geometry');
-        }catch(err){
+            if (!res.ok) throw new Error('ORS failed status ' + res.status);
+            data = await res.json();
+        } catch (err) {
             console.error('Routing error', err);
-            document.getElementById('route-info').textContent='Routing failed';
+            document.getElementById('route-info').textContent = 'Routing failed';
             addMarkers();
             return;
         }
 
-        const latlngs=data.features[0].geometry.coordinates.map(c=>[c[1],c[0]]);
-        const segments=[];
-        for(let i=0;i<latlngs.length-1;i++){
-            segments.push({lat1:latlngs[i][0], lon1:latlngs[i][1], lat2:latlngs[i+1][0], lon2:latlngs[i+1][1]});
+        const latlngs = data.features[0].geometry.coordinates.map(c => [c[1], c[0]]);
+        const segments = [];
+        for (let i = 0; i < latlngs.length-1; i++) {
+            segments.push({
+                lat1: latlngs[i][0],
+                lon1: latlngs[i][1],
+                lat2: latlngs[i+1][0],
+                lon2: latlngs[i+1][1]
+            });
         }
 
-        segments.forEach(seg=>{
-            polyMap.push(L.polyline([[seg.lat1,seg.lon1],[seg.lat2,seg.lon2]],{color:'gray', weight:5, opacity:0.7}).addTo(map));
+        segments.forEach(seg => {
+            polyMap.push(
+                L.polyline([[seg.lat1, seg.lon1], [seg.lat2, seg.lon2]], {
+                    color: 'gray', weight: 5, opacity: 0.7
+                }).addTo(map)
+            );
         });
 
         // DB batch lookup
-        let dbSegments=[];
-        try{
+        let dbSegments = [];
+        try {
             const resp = await fetch('/api/road-segments-batch', {
-                method:'POST',
-                headers:{'Content-Type':'application/json','X-CSRF-TOKEN':csrfToken},
-                body: JSON.stringify({segments})
+                method: 'POST',
+                headers: {'Content-Type': 'application/json', 'X-CSRF-TOKEN': csrfToken},
+                body: JSON.stringify({ segments })
             });
             dbSegments = await resp.json();
-        }catch(err){
+        } catch (err) {
             console.warn('DB batch lookup error', err);
         }
 
-        // Segments missing DB speed
         const missingSegments = [];
-        segments.forEach((seg, idx)=>{
+
+        segments.forEach((seg, idx) => {
             const matched = dbSegments[idx];
             const maxspeed = matched?.maxspeed ?? null;
-            if(maxspeed){
-                polyMap[idx].setStyle({color:getColorForSpeed(maxspeed)});
-                seg.maxspeed=maxspeed;
-            } else missingSegments.push(seg);
+            if (maxspeed) {
+                polyMap[idx].setStyle({ color: getColorForSpeed(maxspeed) });
+                seg.maxspeed = maxspeed;
+            } else {
+                missingSegments.push(seg);
+            }
         });
 
-        // Overpass only for missing segments
-        if(missingSegments.length>0){
-            const south=Math.min(...missingSegments.map(s=>s.lat1).concat(missingSegments.map(s=>s.lat2))),
-                  north=Math.max(...missingSegments.map(s=>s.lat1).concat(missingSegments.map(s=>s.lat2))),
-                  west=Math.min(...missingSegments.map(s=>s.lon1).concat(missingSegments.map(s=>s.lon2))),
-                  east=Math.max(...missingSegments.map(s=>s.lon1).concat(missingSegments.map(s=>s.lon2)));
-            const query=`[out:json];way["highway"]["maxspeed"](${south},${west},${north},${east});out tags geom;`;
-            let ways=[];
-            try{
-                const resp = await fetch('https://overpass-api.de/api/interpreter?data='+encodeURIComponent(query));
+        // Overpass for missing ones
+        if (missingSegments.length > 0) {
+            const south = Math.min(...missingSegments.map(s => s.lat1).concat(missingSegments.map(s => s.lat2)));
+            const north = Math.max(...missingSegments.map(s => s.lat1).concat(missingSegments.map(s => s.lat2)));
+            const west  = Math.min(...missingSegments.map(s => s.lon1).concat(missingSegments.map(s => s.lon2)));
+            const east  = Math.max(...missingSegments.map(s => s.lon1).concat(missingSegments.map(s => s.lon2)));
+
+            const query = `[out:json];
+                way["highway"]["maxspeed"](${south},${west},${north},${east});
+                out tags geom;`;
+
+            let ways = [];
+
+            try {
+                const resp = await fetch('https://overpass-api.de/api/interpreter?data=' + encodeURIComponent(query));
                 const text = await resp.text();
                 ways = text.startsWith('{') ? JSON.parse(text).elements || [] : [];
-            }catch(err){ console.warn('Overpass error', err); ways=[]; }
+            } catch (err) {
+                console.warn('Overpass error', err);
+                ways = [];
+            }
 
-            const toSave=[];
-            missingSegments.forEach(seg=>{
-                let nearest=null, minDist=Infinity;
-                const midLat=(seg.lat1+seg.lat2)/2, midLon=(seg.lon1+seg.lon2)/2;
-                ways.forEach(w=>{
-                    if(!w.geometry||!w.tags) return;
-                    for(let j=0;j<w.geometry.length-1;j++){
-                        const pt1=w.geometry[j], pt2=w.geometry[j+1];
-                        const latMid=(pt1.lat+pt2.lat)/2, lonMid=(pt1.lon+pt2.lon)/2;
-                        const dist = map.distance([midLat,midLon],[latMid,lonMid]);
-                        if(dist<minDist){ minDist=dist; nearest=w; }
+            const toSave = [];
+
+            missingSegments.forEach(seg => {
+                let nearest = null, minDist = Infinity;
+                const midLat = (seg.lat1 + seg.lat2) / 2;
+                const midLon = (seg.lon1 + seg.lon2) / 2;
+
+                ways.forEach(w => {
+                    if (!w.geometry || !w.tags) return;
+
+                    for (let j = 0; j < w.geometry.length - 1; j++) {
+                        const pt1 = w.geometry[j];
+                        const pt2 = w.geometry[j+1];
+                        const latMid = (pt1.lat + pt2.lat) / 2;
+                        const lonMid = (pt1.lon + pt2.lon) / 2;
+                        const dist = map.distance([midLat, midLon], [latMid, lonMid]);
+                        if (dist < minDist) {
+                            minDist = dist;
+                            nearest = w;
+                        }
                     }
                 });
-                if(nearest && nearest.tags && nearest.tags.maxspeed){
+
+                if (nearest && nearest.tags?.maxspeed) {
                     const parsedSpeed = parseInt(nearest.tags.maxspeed) || null;
-                    if(parsedSpeed){
-                        seg.maxspeed=parsedSpeed;
-                        seg.mid_lat=Number(((seg.lat1+seg.lat2)/2).toFixed(7));
-                        seg.mid_lon=Number(((seg.lat1+seg.lat2)/2).toFixed(7));
+                    if (parsedSpeed) {
+                        seg.maxspeed = parsedSpeed;
                         toSave.push(seg);
                     }
                 }
             });
 
-            if(toSave.length>0){
-                try{
-                    const resp=await fetch('/api/save-road-segment-batch',{
-                        method:'POST',
-                        headers:{'Content-Type':'application/json','X-CSRF-TOKEN':csrfToken},
-                        body:JSON.stringify({segments:toSave})
+            if (toSave.length > 0) {
+                try {
+                    await fetch('/api/save-road-segment-batch', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-CSRF-TOKEN': csrfToken
+                        },
+                        body: JSON.stringify({ segments: toSave })
                     });
-                    if(!resp.ok) console.warn('Save batch returned non-ok', resp.status);
-                }catch(err){ console.warn('Save batch error', err); }
+                } catch (err) {
+                    console.warn('Saving failed', err);
+                }
 
-                toSave.forEach(seg=>{
-                    const idx=segments.findIndex(s=>{
-                        const a=canonicalizeSegment(s), b=canonicalizeSegment(seg);
-                        return a.lat1===b.lat1 && a.lon1===b.lon1 && a.lat2===b.lat2 && a.lon2===b.lon2;
+                // Apply colors
+                toSave.forEach(seg => {
+                    const idx = segments.findIndex(s => {
+                        const a = canonicalizeSegment(s);
+                        const b = canonicalizeSegment(seg);
+                        return (
+                            a.lat1 === b.lat1 &&
+                            a.lon1 === b.lon1 &&
+                            a.lat2 === b.lat2 &&
+                            a.lon2 === b.lon2
+                        );
                     });
-                    if(idx>=0) polyMap[idx].setStyle({color:getColorForSpeed(seg.maxspeed)});
+                    if (idx >= 0) {
+                        polyMap[idx].setStyle({ color: getColorForSpeed(seg.maxspeed) });
+                    }
                 });
             }
         }
@@ -226,27 +314,32 @@ document.addEventListener('DOMContentLoaded', async ()=> {
         addMarkers();
 
         const summary = data.features[0].properties?.summary;
-        if(summary) document.getElementById('route-info').textContent=`Route: ${formatDistance(summary.distance)}, ${formatTime(summary.duration)}`;
-        else document.getElementById('route-info').textContent=`Route loaded`;
+        if (summary) {
+            document.getElementById('route-info').textContent =
+                `Route: ${formatDistance(summary.distance)}, ${formatTime(summary.duration)}`;
+        } else {
+            document.getElementById('route-info').textContent = `Route loaded`;
+        }
 
         const steps = data.features[0].properties?.segments?.[0]?.steps || [];
         const dirList = document.getElementById('directions-list');
-        dirList.innerHTML='';
-        steps.forEach(step=>{
-            const li=document.createElement('li');
-            li.textContent=`${step.instruction} — ${formatDistance(step.distance)}, ${formatTime(step.duration)}`;
+        dirList.innerHTML = '';
+        steps.forEach(step => {
+            const li = document.createElement('li');
+            li.textContent =
+                `${step.instruction} — ${formatDistance(step.distance)}, ${formatTime(step.duration)}`;
             dirList.appendChild(li);
         });
-    }
+    } // end drawRoute()
 
-    function addMarkers(){
-        orderedStops.forEach(stop=>{
-            const m=L.marker([stop.latitude, stop.longitude],{draggable:true})
+    function addMarkers() {
+        orderedStops.forEach(stop => {
+            const m = L.marker([stop.latitude, stop.longitude], { draggable: true })
                 .bindPopup(stop.name)
                 .addTo(map)
-                .on('dragend', e=>{
-                    stop.latitude=e.target.getLatLng().lat;
-                    stop.longitude=e.target.getLatLng().lng;
+                .on('dragend', e => {
+                    stop.latitude = e.target.getLatLng().lat;
+                    stop.longitude = e.target.getLatLng().lng;
                     drawRoute();
                 });
             markers.push(m);
@@ -255,16 +348,18 @@ document.addEventListener('DOMContentLoaded', async ()=> {
 
     drawRoute();
 
-    Sortable.create(document.getElementById('stops-table-body'),{
-        animation:150,
-        onEnd:function(){
-            orderedStops=Array.from(document.querySelectorAll('#stops-table-body tr')).map(tr=>{
-                const id=parseInt(tr.dataset.id);
-                return stops.find(s=>s.id===id);
-            });
+    Sortable.create(document.getElementById('stops-table-body'), {
+        animation: 150,
+        onEnd: function() {
+            orderedStops = Array.from(document.querySelectorAll('#stops-table-body tr'))
+                .map(tr => {
+                    const id = parseInt(tr.dataset.id);
+                    return stops.find(s => s.id === id);
+                });
             drawRoute();
         }
     });
+
 });
 </script>
 

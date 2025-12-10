@@ -51,7 +51,20 @@
 
     <script>
         const csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
-        const speedColors = {20:'red',30:'pink',50:'orange',70:'lime',80:'yellow',90:'green',100:'teal',110:'blue',120:'purple'};
+            const speedColors = {
+            20:  '#e6194B', // Strong Red
+            30:  '#f58231', // Orange
+            40:  '#ffe119', // Yellow
+            50:  '#bfef45', // Lime green
+            60:  '#3cb44b', // Green
+            70:  '#42d4f4', // Light Cyan
+            80:  '#4363d8', // Blue
+            90:  '#911eb4', // Purple
+            100: '#f032e6', // Magenta
+            110: '#a9a9a9', // Gray
+            120: '#000000', // Black
+        };
+
         function getColorForSpeed(speed){return speedColors[speed] ?? 'gray';}
 
         let segments = @json($segmentsForMap ?? []);
