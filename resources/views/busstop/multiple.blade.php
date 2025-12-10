@@ -14,6 +14,54 @@
     border-radius: 2px;
     transform-origin: center center;
 }
+#radar-log-container {
+    position: absolute;
+    left: 12px;
+    top: 120px;
+    width: 360px;
+    max-height: 320px;
+    background: #fff;
+    border: 1px solid #bbb;
+    font-size: 12px;
+    display: flex;
+    flex-direction: column;
+    z-index: 1000;
+}
+
+.radar-log-header,
+.radar-log-footer {
+    padding: 6px 8px;
+    background: #f0f0f0;
+    font-weight: bold;
+    border-bottom: 1px solid #ccc;
+}
+
+.radar-log-footer {
+    border-top: 1px solid #ccc;
+    border-bottom: none;
+}
+
+#radar-log {
+    padding: 6px;
+    overflow-y: auto;
+    flex: 1;
+    font-family: monospace;
+}
+
+.radar-log-entry {
+    margin-bottom: 6px;
+    padding-bottom: 4px;
+    border-bottom: 1px dashed #ddd;
+}
+
+.radar-log-entry.speeding {
+    color: #b00020;
+}
+
+.radar-log-entry.legal {
+    color: #2e7d32;
+}
+
 
 </style>
 <div class="p-6 space-y-6">
@@ -44,13 +92,27 @@
                 </div>
             @endforeach
         </div>
-        <!-- Car Info Legend -->
-        <div class="p-2 rounded bg-white shadow absolute bottom-4 right-4 z-[9999] text-sm">
-            <h4 class="font-bold mb-1">Car Info</h4>
-            <div>Speed: <strong id="car-speed">—</strong></div>
-            <div>Heading: <strong id="car-heading">—</strong></div>
-            <div>Next speed change: <strong id="car-distance">—</strong></div>
-        </div>
+<div id="radar-log-box"
+     style="font-size: 12px; max-height: 200px; overflow-y: auto; border: 1px solid #ccc; padding: 6px; background:#fff;">
+    <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+        <strong>Radar log</strong>
+        <span>Fined cars: <span id="car-fines">0</span></span>
+    </div>
+
+    <!-- optional: keep basic car telemetry at top -->
+    <div style="margin-bottom:4px; font-size:11px; color:#555;">
+        Speed: <span id="car-speed">—</span> ·
+        Heading: <span id="car-heading">—</span> ·
+        Next speed change: <span id="car-distance">—</span>
+    </div>
+
+    <div id="radar-log-entries"></div>
+</div>
+
+</div>
+
+
+
 
     </div>
 
